@@ -1,0 +1,40 @@
+<?php  // Moodle configuration file
+
+unset($CFG);
+global $CFG;
+$CFG = new stdClass();
+
+$CFG->dbtype    = 'mariadb';
+$CFG->dblibrary = 'native';
+$CFG->dbhost    = 'localhost';
+$CFG->dbname    = 'moodledb';
+$CFG->dbuser    = 'moodleusr';
+$CFG->dbpass    = '{{ moodledb_password }}';
+$CFG->prefix    = 'mdl_';
+$CFG->dboptions = array (
+  'dbpersist' => 0,
+  'dbport' => '',
+  'dbsocket' => '',
+  'dbcollation' => 'utf8mb4_general_ci',
+);
+
+$CFG->wwwroot   = '{{ moodle_site }}';
+$CFG->dataroot  = '/web/moodledata';
+$CFG->admin     = 'admin';
+
+$CFG->directorypermissions = 0777;
+
+$CFG->preventexecpath = true;
+
+$CFG->pathtophp = "/usr/bin/php";
+$CFG->pathtodu = "/usr/bin/du";
+$CFG->aspellpath = "/usr/bin/aspell";
+$CFG->pathtodot = "/usr/bin/dot";
+$CFG->pathtogs = "/usr/bin/gs";
+$CFG->pathtopdftoppm = "/usr/bin/pdftoppm";
+$CFG->pathtopython = "/usr/bin/python3";
+
+require_once(__DIR__ . '/lib/setup.php');
+
+// There is no php closing tag in this file,
+// it is intentional because it prevents trailing whitespace problems!

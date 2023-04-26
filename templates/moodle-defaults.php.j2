@@ -1,0 +1,19 @@
+<?php  // Moodle defaults
+
+$defaults['auth_ldap']['host_url'] = '{{ moodle_ldaphost }}';
+// Remove or comment the next two lines to use Anonymous
+$defaults['auth_ldap']['bind_dn'] = 'cn=ldappxy,cn=users,DC=ad,DC=lab,DC=home';
+$defaults['auth_ldap']['bind_pw'] = 'Passw0rd';
+$defaults['auth_ldap']['start_tls'] = 1;
+$defaults['auth_ldap']['preventpassindb'] = 1;
+$defaults['auth_ldap']['search_sub'] = 1;
+$defaults['auth_ldap']['user_attribute'] = 'cn';
+$defaults['auth_ldap']['contexts'] = '{{ moodle_ldapbase }}';
+$defaults['auth_ldap']['field_map_firstname'] = 'givenName';
+$defaults['auth_ldap']['field_map_lastname'] = 'sn';
+$defaults['auth_ldap']['field_map_email'] = 'mail';
+$defaults['auth_ldap']['user_type'] = 'ad';
+
+// There is no php closing tag in this file,
+// it is intentional because it prevents trailing whitespace problems!
+

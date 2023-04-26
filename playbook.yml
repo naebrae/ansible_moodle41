@@ -1,0 +1,30 @@
+---
+- hosts: all,!dc1
+  become: true
+  vars:
+  - host_domain: "lab.home"
+  tasks:
+  - hostname: name={{ inventory_hostname | lower }}.{{ host_domain | lower }}
+  - file: src=/usr/share/zoneinfo/Australia/Perth dest=/etc/localtime state=link force=yes
+  - yum: name=libselinux-python state=present
+    when: ansible_os_family == "RedHat" and ansible_distribution_major_version|int <= 7
+  - selinux: policy=targeted state=permissive
+
+  - shell: openssl req -new -x509 -newkey rsa:2048 -sha256 -nodes -days 3652 -out /etc/pki/tls/certs/{{ moodle_site | urlsplit('hostname') | regex_replace('\.', '_') }}.crt -keyout /etc/pki/tls/private/{{ moodle_site | urlsplit('hostname') | regex_replace('\.', '_') }}.key -subj "/CN={{ moodle_site | urlsplit('hostname') }}"
+  - lineinfile: dest=/etc/hosts line="192.168.1.141 {{ moodle_site | urlsplit('hostname') }}" regexp="^192.168.1.141" state=present
+  - shell: echo | openssl s_client -connect dc1.ad.lab.home:636 2>&1 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > /usr/share/pki/ca-trust-source/anchors/dc1.pem
+  - shell: /usr/bin/update-ca-trust
+
+- import_playbook: site.yml
+  when: inventory_hostname != "dc1"
+
+- hosts: dc1
+  gather_facts: false
+  become: true
+  vars:
+  - host_domain: ad.lab.home
+  tasks:
+  - raw: apk add python3 tzdata
+  - hostname: name={{ inventory_hostname | lower }}.{{ host_domain | lower }}
+  - shell: hostname -F /etc/hostname
+  - file: src=/usr/share/zoneinfo/Australia/Perth dest=/etc/localtime state=link force=yes

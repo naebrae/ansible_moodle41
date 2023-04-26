@@ -1,0 +1,88 @@
+---
+- hosts: dc1
+  gather_facts: false
+  become: true
+  vars:
+  - host_domain: ad.lab.home
+  tasks:
+  - raw: apk add python3 tzdata
+  - hostname: name={{ inventory_hostname | lower }}.{{ host_domain | lower }}
+  - shell: hostname -F /etc/hostname
+  - file: src=/usr/share/zoneinfo/Australia/Perth dest=/etc/localtime state=link force=yes
+
+- hosts: dc1
+  gather_facts: true
+  become: true
+  tasks:
+  - apk:
+      name:
+      - samba-dc
+      - krb5
+      state: installed
+
+  - copy: src=samba.init dest=/etc/init.d/samba owner=root group=root mode=0755
+  - file: path=/etc/samba/smb.conf state=absent
+  - file: path=/etc/krb5.conf state=absent
+  - shell: samba-tool domain provision --use-rfc2307 --option="interfaces=lo eth1" --option="bind interfaces only=yes" --realm=AD.LAB.HOME --domain=AD --adminpass=Passw0rd --dns-backend=SAMBA_INTERNAL
+  - file: src=/var/lib/samba/private/krb5.conf dest=/etc/krb5.conf state=link
+
+  - shell: openssl req -new -x509 -nodes -sha256 -days 7304 -newkey rsa:2048
+     -keyout /var/lib/samba/private/tls/key.pem
+     -out /var/lib/samba/private/tls/cert.pem
+     -subj "/CN=ad.lab.home"
+     -extensions exts
+     -config <(cat
+     <(printf "[ req ]\n")
+     <(printf "distinguished_name=req\n")
+     <(printf "[ exts ]\n")
+     <(printf "subjectAltName=DNS:{{ ansible_fqdn }},DNS:{{ ansible_hostname }}{% for ipv4_address in ansible_all_ipv4_addresses %},IP:{{ ipv4_address }}{% endfor %}\n")
+     <(printf "keyUsage=critical,digitalSignature,keyCertSign,cRLSign\n")
+     <(printf "basicConstraints=critical,CA:true\n")
+     <(printf "subjectKeyIdentifier=hash\n")
+     <(printf "authorityKeyIdentifier=keyid\n")
+     )
+    args:
+      executable: /bin/bash
+  - file: src=/var/lib/samba/private/tls/cert.pem dest=/var/lib/samba/private/tls/ca.pem state=link
+
+  - service: name=samba state=restarted enabled=true
+
+  - shell: samba-tool ou create "ou=Accounts"
+  - shell: samba-tool ou create "ou=Groups"
+  - shell: samba-tool ou create "ou=Servers"
+  - shell: samba-tool ou create "ou=PrivGroups"
+
+  # Enable anonymous access and read to accounts and groups
+  - shell: samba-tool forest directory_service dsheuristics 0000002
+  - shell: samba-tool dsacl set --objectdn=DC=ad,DC=lab,DC=home --sddl='(A;;RPLCLORC;;;AN)'
+  - shell: samba-tool dsacl set --objectdn=OU=Accounts,DC=ad,DC=lab,DC=home --sddl='(A;CI;RPLCLORC;;;AN)'
+  - shell: samba-tool dsacl set --objectdn=OU=Groups,DC=ad,DC=lab,DC=home --sddl='(A;CI;RPLCLORC;;;AN)'
+
+  - shell: samba-tool user create ldappxy Passw0rd --given-name="LDAP" --surname="Proxy" --use-username-as-cn
+
+  - shell: samba-tool group add linuxusers --gid-number=2000 --nis-domain=AD --groupou="ou=Groups"
+
+  - shell: samba-tool user create user1 Passw0rd --given-name="User" --surname="One" --use-username-as-cn --mail-address="user1@lab.home" --uid=user1 --uid-number=3001 --gid-number=2000 --unix-home=/home/user1 --gecos="User One" --login-shell=/bin/bash --nis-domain=AD --userou="ou=Accounts"
+  - shell: samba-tool user create user2 Passw0rd --given-name="User" --surname="Two" --use-username-as-cn --mail-address="user2@lab.home" --uid=user2 --uid-number=3002 --gid-number=2000 --unix-home=/home/user2 --gecos="User Two" --login-shell=/bin/bash --nis-domain=AD --userou="ou=Accounts"
+
+  - shell: samba-tool group addmembers linuxusers user1,user2
+
+  - shell: samba-tool user create user3 Password1 --must-change-at-next-login --given-name="User" --surname="Three" --use-username-as-cn --mail-address="user3@lab.home" --userou="ou=Accounts"
+  - shell: samba-tool user create user4 Password1 --must-change-at-next-login --given-name="User" --surname="Four" --use-username-as-cn --mail-address="user4@lab.home" --userou="ou=Accounts"
+
+  - shell: samba-tool group add sysadmins --gid-number=2001 --nis-domain=AD --groupou="ou=Groups"
+  - shell: samba-tool group add internals --gid-number=10001 --nis-domain=AD --groupou="ou=Groups"
+  - shell: samba-tool group add suppliers --gid-number=20001 --nis-domain=AD --groupou="ou=Groups"
+
+  - shell: samba-tool user create sysadm Passw0rd --given-name="System" --surname="Admin" --use-username-as-cn --uid=sysadm --uid-number=2001 --gid-number=2001 --unix-home=/home/sysadm --gecos="System Admin" --login-shell=/bin/bash --nis-domain=AD --mail-address="system.admin@lab.home" --userou="ou=Accounts"
+  - shell: samba-tool group addmembers sysadmins sysadm
+
+  - shell: samba-tool user create 1001A Passw0rd --given-name="Internal" --surname="One" --use-username-as-cn --uid=1001A --uid-number=10001 --gid-number=10001 --unix-home=/home/1001A --gecos="Internal One" --login-shell=/bin/bash --nis-domain=AD --mail-address="internal.one@lab.home" --userou="ou=Accounts"
+  - shell: samba-tool user create 1002B Passw0rd --given-name="Internal" --surname="Two" --use-username-as-cn --uid=1002B --uid-number=10002 --gid-number=10001 --unix-home=/home/1002B --gecos="Internal Two" --login-shell=/bin/bash --nis-domain=AD --mail-address="internal.two@lab.home" --userou="ou=Accounts"
+
+  - shell: samba-tool group addmembers internals 1001A,1002B
+
+  - shell: samba-tool user create 20001 Passw0rd --given-name="Supplier" --surname="One" --use-username-as-cn --uid=20001 --uid-number=20001 --gid-number=20001 --unix-home=/home/20001 --gecos="Supplier One" --login-shell=/bin/bash --nis-domain=AD --mail-address="supplier.one@lab.home" --userou="ou=Accounts"
+  - shell: samba-tool user create 20002 Passw0rd --given-name="Supplier" --surname="Two" --use-username-as-cn --uid=20002 --uid-number=20002 --gid-number=20001 --unix-home=/home/20002 --gecos="Supplier Two" --login-shell=/bin/bash --nis-domain=AD --mail-address="supplier.two@lab.home" --userou="ou=Accounts"
+
+  - shell: samba-tool group addmembers suppliers 20001,20002

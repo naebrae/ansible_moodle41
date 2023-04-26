@@ -1,0 +1,173 @@
+- hosts: all
+  become: true
+  tasks:
+  - assert:
+      that: ansible_os_family == "RedHat" and ansible_distribution_major_version|int >=8 and ansible_distribution_major_version|int <= 9
+      fail_msg: "This can only be run against Supported OSs. {{ ansible_distribution }} {{ ansible_distribution_major_version }} is not supported."
+      success_msg: "This is running against a supported OS {{ ansible_distribution }} {{ ansible_distribution_major_version }}"
+
+  - shell: subscription-manager repos --enable rhel-8-server-optional-rpms --enable codeready-builder-for-rhel-8-x86_64-rpms
+    when: ansible_distribution == "RedHat" and ansible_distribution_major_version|int == 8
+  - shell: subscription-manager repos --enable rhel-9-server-optional-rpms --enable codeready-builder-for-rhel-9-x86_64-rpms
+    when: ansible_distribution == "RedHat" and ansible_distribution_major_version|int == 9
+
+  - shell: warn=no dnf config-manager --set-enabled powertools
+    when: ansible_distribution_major_version|int == 8
+  - shell: warn=no dnf config-manager --set-enabled crb
+    when: ansible_distribution_major_version|int == 9
+
+  - yum:
+      name:
+      - httpd
+      - mod_ssl
+      - unzip
+      - git
+      - gcc
+      - make
+      - graphviz
+      - poppler-utils
+      - ghostscript
+      - aspell
+      - python3
+      state: present
+
+  - yum: name=epel-release state=installed
+    when: ansible_distribution == "CentOS" or ansible_distribution == "AlmaLinux"
+
+  - shell: warn=no dnf -y module enable mariadb:10.5
+    when: ansible_distribution_major_version|int == 8
+
+  - yum:
+      name:
+      - mariadb-server
+      state: installed
+  - service: name=mariadb enabled=true state=started
+
+  - name: Remove anonymous users
+    command: mysql -e "DELETE FROM mysql.global_priv WHERE User='';"
+    ignore_errors: true
+  - name: Disallow root login remotely
+    command: mysql -e "DELETE FROM mysql.global_priv WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+    ignore_errors: true
+  - name: Dropping test database
+    command: mysql -e "DROP DATABASE IF EXISTS test"
+    ignore_errors: true
+  - name: Removing privileges on test database
+    command: mysql -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%'"
+    ignore_errors: true
+  - name: Reload privilege tables now
+    command: mysql -e "FLUSH PRIVILEGES"
+    ignore_errors: true
+
+  - shell: warn=no dnf -y module enable php:7.4
+    when: ansible_distribution_major_version|int == 8
+
+  - yum:
+      name:
+      - php 
+      - php-gd 
+      - php-mbstring
+      - php-mysqlnd
+      - php-ldap
+      - php-pecl-apcu
+      - php-intl
+      - php-opcache
+      - php-zip
+      - php-soap
+      - php-json
+      - php-xml
+      - php-devel
+      - php-pear
+      state: installed
+
+  - yum:
+      name:
+      - php-xmlrpc
+      state: present
+    when: ansible_distribution_major_version|int == 8
+
+  - yum:
+      name:
+      - libyaml-devel
+      state: installed
+  - shell: creates=/usr/lib64/php/modules/yaml.so  echo | /usr/bin/pecl install -f yaml
+  - copy: content='extension=yaml' dest=/etc/php.d/20-yaml.ini owner=root group=root
+
+  - yum: 
+      name:
+      - libsodium
+      - libsodium-devel
+      state: installed
+  - shell: creates=/usr/lib64/php/modules/sodium.so echo | /usr/bin/pecl install -f libsodium
+  - copy: content='extension=sodium' dest=/etc/php.d/20-sodium.ini owner=root group=root
+
+  - ini_file:
+      path: /etc/php.ini
+      section: PHP
+      option: max_input_vars
+      value: '5000'
+
+  - ini_file:
+      path: /etc/php.ini
+      section: PHP
+      option: upload_max_filesize
+      value: '200M'
+
+  - ini_file:
+      path: /etc/php.ini
+      section: Date
+      option: date.timezone
+      value: 'Australia/Perth'
+
+  - file: path=/web state=directory owner=root group=root mode=0755
+  - file: path=/web/moodledata state=directory owner=apache group=apache mode=0750
+
+  - block:
+    # Install from github if usegit = true
+    - git: repo=https://github.com/moodle/moodle.git dest=/web/moodle single_branch=yes version="MOODLE_401_STABLE" update=no
+    when: usegit is defined and usegit|lower == 'true'
+
+  - block:
+    # Install from tgz if usergit not defined or not = true
+    - name: test for local moodle-latest-401.tgz
+      local_action: stat path=files/moodle-latest-401.tgz
+      become: false
+      register: localmoodletgz
+
+    - block:
+      # Download and install from tar gzip from github
+      - get_url: url=https://download.moodle.org/download.php/direct/stable401/moodle-latest-401.tgz dest=/tmp/
+      - unarchive: src=/tmp/moodle-latest-401.tgz dest=/web/ remote_src=yes owner=root group=root
+      when: not localmoodletgz.stat.exists
+
+    - block:
+      # Install from previously downloaded tar gzip stored in files folder of playbook
+      - unarchive: src=moodle-latest-401.tgz dest=/web/ owner=root group=root
+      when: localmoodletgz.stat.exists
+    when: not usegit is defined or not usegit|lower == 'true'
+
+  - template: src=moodle-http.conf.j2 dest=/etc/httpd/conf.d/moodle.conf owner=root group=root mode=0644
+  - copy: src=moodle-ssl.conf dest=/etc/httpd/conf.d/ssl.conf owner=root group=root mode=0644 
+
+  - set_fact: moodledb_password="{{ lookup('password', '/dev/null length=20') }}"
+  - template: src=moodle-config.php.j2 dest=/web/moodle/config.php owner=root group=root mode=0644
+  - template: src=moodle-defaults.php.j2 dest=/web/moodle/local/defaults.php owner=root group=root mode=0644
+
+  - command: mysql -e "create database if not exists moodledb;"
+  - command: mysql -e "grant all privileges on moodledb.* to moodleusr@localhost identified by '{{ moodledb_password }}';"
+  - command: mysql -e "flush privileges;"
+
+  - firewalld: service=http permanent=true state=enabled
+  - firewalld: service=https permanent=true state=enabled
+  - service: name=firewalld state=restarted
+
+  - cron: name="Moodle CRON" user=apache job="/usr/bin/php  /web/moodle/admin/cli/cron.php >/dev/null"
+
+  - service: name=httpd enabled=true state=restarted
+
+  - name: Moodle install_database
+    shell: sudo -u apache /usr/bin/php /web/moodle/admin/cli/install_database.php --adminpass='{{ moodle_adminpass }}' --adminemail='{{ moodle_adminemail }}' --fullname='{{ moodle_fullname }}' --shortname='{{ moodle_shortname }}' --agree-license
+
+  - shell: sudo -u apache /usr/bin/php /web/moodle/admin/cli/cfg.php --name=auth --set=ldap,lti
+#  - shell: sudo -u apache /usr/bin/php /web/moodle/admin/cli/cfg.php --name=media_plugins_sortorder --set=videojs,youtube,html5video,html5audio
+
